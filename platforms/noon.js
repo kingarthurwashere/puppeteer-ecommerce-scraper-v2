@@ -1,159 +1,70 @@
 const { Product } = require("../models/product");
-const { generateJobId, setupPageFilters } = require("../utils");
-const { getBrowser } = require("./browserManager");
+const { generateJobId, gotoFast, parsePrice } = require("../utils");
+const { createPage } = require("./browserManager");
 
 async function scrapWithNoon(url) {
     let context;
     try {
-        const browser = await getBrowser();
-        context = await browser.createBrowserContext();
-        const page = await context.newPage();
-        
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        const created = await createPage({ proxy: false });
+        context = created.context;
+        const page = created.page;
 
-        await setupPageFilters(page);
+        // Fast nav: resolve on DOM ready, then wait only for the price block.
+        await gotoFast(page, url, [
+            'div.priceNow[data-qa="div-price-now"]',
+            '.sc-6562d01f-19.giwmNf',
+        ]);
 
-        // Increase navigation timeout to 120 seconds
-        await page.setDefaultNavigationTimeout(120000);
-
-        await page.goto(url);
-
-        let product = new Product();
+        const product = new Product();
         product.jobId = generateJobId();
         product.url = url;
 
-        // Extract title
-        try
-        {
-            product.title = await page.evaluate( () =>
-            {
-                const titleElement = document.querySelector( '.sc-6562d01f-19.giwmNf' );
-                return titleElement ? titleElement.textContent.trim() : "Not found";
-            } );
-        } catch ( error )
-        {
-            console.error( "Error occurred while extracting title:", error );
-        }
+        // Pull every field in a single page.evaluate round-trip (faster + fewer awaits).
+        const extracted = await page.evaluate(() => {
+            const text = (sel) => {
+                const el = document.querySelector(sel);
+                return el ? el.textContent.trim() : null;
+            };
+            const joinAll = (sel) =>
+                Array.from(document.querySelectorAll(sel), (el) => el.textContent?.trim())
+                    .filter(Boolean)
+                    .join("\n");
 
+            const priceRaw = text('div.priceNow[data-qa="div-price-now"]');
+            const imgEl = document.querySelector("div.sc-d8caf424-2.fJBKzl img");
+            const shipEl = document.querySelector(
+                'div[data-pl="product-shipping"] div.dynamic-shipping div.dynamic-shipping-line.dynamic-shipping-titleLayout span strong'
+            );
 
-        // Extract brand
-        try
-        {
-            product.brand = await page.evaluate( () =>
-            {
-                const brandElement = document.querySelector( '.sc-90850211-18.drjWKA' );
-                return brandElement ? brandElement.textContent.trim() : "Not found";
-            } );
-        } catch ( error )
-        {
-            console.error( "Error occurred while extracting brand:", error );
-        }
+            return {
+                title: text(".sc-6562d01f-19.giwmNf"),
+                brand: text(".sc-90850211-18.drjWKA"),
+                image: imgEl ? imgEl.getAttribute("src") : null,
+                priceRaw,
+                currency: priceRaw && priceRaw.match(/[A-Z]+/) ? priceRaw.match(/[A-Z]+/)[0] : null,
+                specifications: joinAll("div.sc-966c8510-0.jLcJyt"),
+                highlights: joinAll("div.sc-97eb4126-1.iMnGaT"),
+                estimator: text("div.estimator_first"),
+                model: text("div.modelNumber"),
+                shippingRaw: shipEl ? shipEl.textContent.trim() : null,
+            };
+        });
 
-
-        // Extract image
-        try {
-            product.image = await page.evaluate(() => {
-                const imageElement = document.querySelector("div.sc-d8caf424-2.fJBKzl img");
-                return imageElement ? imageElement.getAttribute("src") : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting image:", error);
-        }
-
-        // Extract price
-        try
-        {
-            product.price = await page.evaluate( () =>
-            {
-                const priceElement = document.querySelector( 'div.priceNow[data-qa="div-price-now"]' );
-                return priceElement ? priceElement.textContent.trim() : 'Not found';
-            } );
-            product.price = parseFloat( product.price.replace( /[^\d.]/g, '' ) );
-        } catch ( error )
-        {
-            console.error( "Error occurred while extracting price:", error );
-        }
-
-        // Extract currency
-        try
-        {
-            product.currency = await page.evaluate( () =>
-            {
-                const currencyElement = document.querySelector( 'div.priceNow[data-qa="div-price-now"]' );
-                if ( currencyElement )
-                {
-                    const currencyText = currencyElement.textContent.trim();
-                    // Extract the currency symbol and convert it to uppercase
-                    return currencyText.match( /[A-Z]+/ ) ? currencyText.match( /[A-Z]+/ )[ 0 ] : "Not found";
-                } else
-                {
-                    return "Not found";
-                }
-            } );
-        } catch ( error )
-        {
-            console.error( "Error occurred while extracting currency symbol:", error );
-        }
-
-        // Extract specifications
-        try {
-            product.specifications = await page.evaluate(() => {
-                const specificationsElements = document.querySelectorAll("div.sc-966c8510-0.jLcJyt");
-                return Array.from(specificationsElements, (element) => element.textContent?.trim()).join("\n");
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting specifications:", error);
-        }
-
-        // Extract highlights
-        try {
-            product.highlights = await page.evaluate(() => {
-                const highlightsElements = document.querySelectorAll("div.sc-97eb4126-1.iMnGaT");
-                return Array.from(highlightsElements, (element) => element.textContent?.trim()).join("\n");
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting highlights:", error);
-        }
-
-        // Extract estimator
-        try {
-            product.estimator = await page.evaluate(() => {
-                const estimatorElement = document.querySelector("div.estimator_first");
-                return estimatorElement ? estimatorElement.textContent?.trim() : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting estimator:", error);
-        }
-
-        // Extract model
-        try {
-            product.model = await page.evaluate(() => {
-                const modelElement = document.querySelector("div.modelNumber");
-                return modelElement ? modelElement.textContent?.trim() : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting model number:", error);
-        }
-
-        // Extract shipping price
-        try {
-            let shippingPriceText = await page.evaluate(() => {
-                const shippingPriceElement = document.querySelector('div[data-pl="product-shipping"] div.dynamic-shipping div.dynamic-shipping-line.dynamic-shipping-titleLayout span strong');
-                return shippingPriceElement ? shippingPriceElement.textContent?.trim() : "Not found";
-            });
-
-            if (/^\d*\.?\d+$/.test(shippingPriceText)) {
-                product.shipping_price = parseFloat(shippingPriceText.replace(/[^\d.]/g, ""));
-            } else {
-                product.shipping_price = null;
-            }
-        } catch (error) {
-            console.error("Error occurred while extracting shipping price:", error);
-        }
+        product.title = extracted.title;
+        product.brand = extracted.brand;
+        product.image = extracted.image;
+        product.price = parsePrice(extracted.priceRaw);
+        product.currency = extracted.currency;
+        product.specifications = extracted.specifications;
+        product.highlights = extracted.highlights;
+        product.estimator = extracted.estimator;
+        product.model = extracted.model;
+        product.shipping_price = parsePrice(extracted.shippingRaw);
 
         return product;
     } catch (error) {
-        console.error("An error occurred:", error);
+        console.error("[v0] noon scrape error:", error);
+        throw error;
     } finally {
         if (context) {
             await context.close().catch(() => {});
