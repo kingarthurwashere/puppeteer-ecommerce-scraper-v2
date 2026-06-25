@@ -1,149 +1,76 @@
 const { Product } = require("../models/product");
-const { generateJobId, setupPageFilters } = require("../utils");
-const { getProxyBrowser } = require("./browserManager");
+const { generateJobId, gotoFast, parsePrice } = require("../utils");
+const { createPage } = require("./browserManager");
 
 async function scrapWithAliexpress(url) {
     let context;
     try {
-        const browser = await getProxyBrowser();
-        context = await browser.createBrowserContext();
-        const page = await context.newPage();
+        const created = await createPage({ proxy: true });
+        context = created.context;
+        const page = created.page;
 
-        // Set up proxy authentication
-        const username = 'Dxbrunners';
-        const password = 'Mikhman_2024';
-        await page.authenticate({ username, password });
+        // Fast nav: resolve on DOM ready, then wait only for the product title.
+        await gotoFast(page, url, 'h1[data-pl="product-title"]');
 
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        // Trigger lazy-loaded description content.
+        await page.evaluate(() => window.scrollBy(0, window.innerHeight)).catch(() => {});
 
-        await setupPageFilters(page);
-
-        await page.setDefaultNavigationTimeout(120000);
-
-        await page.goto(url);
-
-        // Scroll down
-        await page.evaluate(() => {
-            window.scrollBy(0, window.innerHeight);
-        });
-
-        let product = new Product();
+        const product = new Product();
         product.jobId = generateJobId();
         product.url = url;
 
-        // Extract title
-        try {
-            product.title = await page.evaluate(() => {
-                const titleElement = document.querySelector(
-                    'h1[data-pl="product-title"]'
-                );
-                return titleElement ? titleElement.textContent.trim() : null;
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting title:", error);
-        }
+        const extracted = await page.evaluate(() => {
+            const text = (sel) => {
+                const el = document.querySelector(sel);
+                return el ? el.textContent.trim() : null;
+            };
 
-        // Extract image
-        try {
-            product.image = await page.evaluate(() => {
-                const imageElement = document.querySelector(
-                    ".image-view--wrap--ewraVkn .slider--wrap--PM2ajTZ img"
-                );
-                return imageElement ? imageElement.getAttribute("src") : null;
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting image:", error);
-        }
+            const imgEl = document.querySelector(
+                ".image-view--wrap--ewraVkn .slider--wrap--PM2ajTZ img"
+            );
+            const shipEl = document.querySelector(
+                'div[data-pl="product-shipping"] div.dynamic-shipping div.dynamic-shipping-line.dynamic-shipping-titleLayout span strong'
+            );
 
-        // Extract description
-        try {
-            product.description = await page.evaluate(() => {
-                const descriptionElement = document.querySelector('.specification--list--fiWsSyv');
-                return descriptionElement ? descriptionElement.textContent.trim() : 'Not found';
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting description:", error);
-        }
-
-        // Extract description images
-        try {
-            product.description_images = await page.evaluate(() => {
-                const imageElements = document.evaluate(
-                    '//div[@id="product-description"]//img/@src',
-                    document,
-                    null,
-                    XPathResult.ANY_TYPE,
-                    null
-                );
-                const result = [];
-                let node = imageElements.iterateNext();
-                while (node) {
-                    result.push(node.value);
-                    node = imageElements.iterateNext();
-                }
-                return result;
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting description images:", error);
-        }
-
-        // Extract specifications
-        try {
-            product.specifications = await page.evaluate(() => {
-                const specificationsElement = document.querySelector('.description--origin-part--SsZJoGC');
-                return specificationsElement ? specificationsElement.textContent.trim() : 'Not found';
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting specifications:", error);
-        }
-
-        // Extract price
-        try {
-            const priceText = await page.evaluate(() => {
-                const priceElement = document.querySelector(
-                    "div.price--current--H7sGzqb.product-price-current"
-                );
-                return priceElement ? priceElement.textContent.trim() : null;
-            });
-
-            if (priceText) {
-                product.price = parseFloat(priceText.replace(/[^\d.]/g, ""));
+            const descImages = [];
+            const it = document.evaluate(
+                '//div[@id="product-description"]//img/@src',
+                document,
+                null,
+                XPathResult.ANY_TYPE,
+                null
+            );
+            let node = it.iterateNext();
+            while (node) {
+                descImages.push(node.value);
+                node = it.iterateNext();
             }
-        } catch (error) {
-            console.error("Error occurred while extracting price:", error);
-        }
 
-        // Extract currency
-        try {
-            product.currency = await page.evaluate(() => {
-                const currencyElement = document.querySelector(
-                    'span[class="es--char--Vcv75ku"]'
-                );
-                return currencyElement ? currencyElement.textContent.trim() : null;
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting currency:", error);
-        }
+            return {
+                title: text('h1[data-pl="product-title"]'),
+                image: imgEl ? imgEl.getAttribute("src") : null,
+                description: text(".specification--list--fiWsSyv"),
+                specifications: text(".description--origin-part--SsZJoGC"),
+                priceRaw: text("div.price--current--H7sGzqb.product-price-current"),
+                currency: text('span[class="es--char--Vcv75ku"]'),
+                shippingRaw: shipEl ? shipEl.textContent.trim() : null,
+                description_images: descImages,
+            };
+        });
 
-        // Extract shipping price
-        try {
-            let shippingPriceText = await page.evaluate(() => {
-                const shippingPriceElement = document.querySelector('div[data-pl="product-shipping"] div.dynamic-shipping div.dynamic-shipping-line.dynamic-shipping-titleLayout span strong');
-                return shippingPriceElement ? shippingPriceElement.textContent.trim() : "Not found";
-            });
-
-            if (shippingPriceText !== "Not found") {
-                product.shipping_price = parseFloat(shippingPriceText.replace(/[^\d.]/g, ''));
-            } else {
-                product.shipping_price = 0.0;
-            }
-        } catch (error) {
-            console.error("Error occurred while extracting Shipping Price:", error);
-        }
+        product.title = extracted.title;
+        product.image = extracted.image;
+        product.description = extracted.description;
+        product.specifications = extracted.specifications;
+        product.price = parsePrice(extracted.priceRaw);
+        product.currency = extracted.currency;
+        product.shipping_price = parsePrice(extracted.shippingRaw) ?? 0.0;
+        product.description_images = extracted.description_images;
 
         return product;
     } catch (error) {
-        console.error("An error occurred:", error);
+        console.error("[v0] aliexpress scrape error:", error);
+        throw error;
     } finally {
         if (context) {
             await context.close().catch(() => {});

@@ -1,105 +1,71 @@
-const puppeteer = require("puppeteer");
 const { Product } = require("../models/product");
-const generateJobId = require("../utils");
+const { generateJobId, gotoFast } = require("../utils");
+const { createPage } = require("./browserManager");
 
 async function scrapeWithShein(url) {
-    let browser;
+    let context;
     try {
-        browser = await puppeteer.launch({
-            headless: true,
-            defaultViewport: null,
-            userDataDir: "./tmp",
-            args: ['--no-sandbox']
-        });
+        const created = await createPage({ proxy: false });
+        context = created.context;
+        const page = created.page;
 
-        const page = await browser.newPage();
+        await gotoFast(page, url, "h1.product-intro__head-name");
 
-        await page.setCacheEnabled(false);
-
-        // Increase navigation timeout to 60 seconds
-        await page.setDefaultNavigationTimeout(120000);
-        await page.goto(url);
-
-        let product = new Product();
+        const product = new Product();
         product.jobId = generateJobId();
         product.url = url;
 
-        // Extract title
-        try {
-            product.title = await page.evaluate(() => {
-                const titleElement = document.querySelector("h1.product-intro__head-name");
-                return titleElement ? titleElement.textContent?.trim() : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting title:", error);
-        }
+        const extracted = await page.evaluate(() => {
+            const text = (sel) => {
+                const el = document.querySelector(sel);
+                return el ? el.textContent?.trim() : null;
+            };
+            const joinAll = (sel) =>
+                Array.from(document.querySelectorAll(sel), (el) => el.textContent?.trim())
+                    .filter(Boolean)
+                    .join("\n");
+            const xpathText = (xpath) => {
+                const node = document.evaluate(
+                    xpath,
+                    document,
+                    null,
+                    XPathResult.FIRST_ORDERED_NODE_TYPE,
+                    null
+                ).singleNodeValue;
+                return node ? node.textContent?.trim() : null;
+            };
 
-        // Extract brand
-        try {
-            product.brand = await page.evaluate(() => {
-                const brandElement = document.querySelector("div.sc-320c5568-17.jvojBZ");
-                return brandElement ? brandElement.textContent?.trim() : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting brand:", error);
-        }
+            const imgEl = document.querySelector(
+                "div.product-intro__thumbs-inner div.product-intro__thumbs-item img"
+            );
+            const model = xpathText(
+                '//div[@class="product-intro__head-sku"]//font[contains(text(), "SKU:")]'
+            );
 
-        // Extract image
-        try {
-            product.image = await page.evaluate(() => {
-                const imageElement = document.querySelector("div.product-intro__thumbs-inner div.product-intro__thumbs-item img");
-                return imageElement ? imageElement.getAttribute("src") : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting image:", error);
-        }
+            return {
+                title: text("h1.product-intro__head-name"),
+                brand: text("div.sc-320c5568-17.jvojBZ"),
+                image: imgEl ? imgEl.getAttribute("src") : null,
+                specifications: joinAll(
+                    "div.product-intro__attr-wrap div.product-intro__description-table-item"
+                ),
+                measurements: joinAll(
+                    "div.product-intro__size-choose.fsp-element div.product-intro__size-radio"
+                ),
+                estimator: xpathText('//p[contains(@class, "product-intro__freeshipping-time")]'),
+                model: model ? model.replace("SKU: ", "") : null,
+            };
+        });
 
-        // Extract specifications
-        try {
-            product.specifications = await page.evaluate(() => {
-                const specificationsElements = document.querySelectorAll("div.product-intro__attr-wrap div.product-intro__description-table-item");
-                return Array.from(specificationsElements, (element) => element.textContent?.trim()).join("\n");
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting specifications:", error);
-        }
-
-        // Extract measurements
-        try {
-            product.measurements = await page.evaluate(() => {
-                const measurementsElements = document.querySelectorAll("div.product-intro__size-choose.fsp-element div.product-intro__size-radio");
-                return Array.from(measurementsElements, (element) => element.textContent?.trim()).join("\n");
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting measurements:", error);
-        }
-
-        // Extract estimator
-        try {
-            product.estimator = await page.evaluate(() => {
-                const estimatorElement = document.evaluate('//p[contains(@class, "product-intro__freeshipping-time")]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                return estimatorElement ? estimatorElement.textContent?.trim() : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting estimator:", error);
-        }
-
-        // Extract model
-        try {
-            product.model = await page.evaluate(() => {
-                const modelElement = document.evaluate('//div[@class="product-intro__head-sku"]//font[contains(text(), "SKU:")]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                return modelElement ? modelElement.textContent?.trim().replace("SKU: ", "") : "Not found";
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting model number:", error);
-        }
+        Object.assign(product, extracted);
 
         return product;
     } catch (error) {
-        console.error("An error occurred:", error);
+        console.error("[v0] shein scrape error:", error);
+        throw error;
     } finally {
-        if (browser) {
-            await browser.close();
+        if (context) {
+            await context.close().catch(() => {});
         }
     }
 }

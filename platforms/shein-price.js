@@ -1,91 +1,51 @@
-const puppeteer = require("puppeteer");
 const { Product } = require("../models/product");
+const { gotoFast, parsePrice } = require("../utils");
+const { createPage } = require("./browserManager");
 
 async function scrapSheinprice(url) {
-    let browser;
+    let context;
     try {
-        const proxy = 'ae-pr.oxylabs.io:40000';
-        const username = 'Dxbrunners';
-        const password = 'Mikhman_2024';
+        const created = await createPage({ proxy: true });
+        context = created.context;
+        const page = created.page;
 
-        const launchOptions = {
-            args: [
-                `--proxy-server=${proxy}`,
-                '--no-sandbox'
-            ],
-            headless: true
-        };
+        await gotoFast(page, url, "div.product-intro__head-mainprice div.original span");
 
-        browser = await puppeteer.launch(launchOptions);
-        const page = await browser.newPage();
-
-        // Set up proxy authentication
-        await page.authenticate({ username, password });
-
-        await page.setCacheEnabled(false);
-
-        await page.setDefaultNavigationTimeout(120000);
-
-        await page.goto(url);
-
-        await page.evaluate(() => {
-            window.scrollBy(0, window.innerHeight); // Scrolls down by the height of the viewport
-        });
-
-        let product = new Product();
+        const product = new Product();
         product.url = url;
 
-        // Extract price
-        try
-        {
-            product.price = await page.evaluate( () =>
-            {
-                const priceElement = document.querySelector( 'div.product-intro__head-mainprice div.original span' );
-                return priceElement ? priceElement.textContent.trim() : 'Not found';
-            } );
-            product.price = parseFloat( product.price.replace( /[^\d.]/g, '' ) );
-        } catch ( error )
-        {
-            console.error( "Error occurred while extracting price:", error );
-        }
-        // Extract currency
-        try {
-            product.currency = await page.evaluate(() => {
-                const currencyElement = document.querySelector('div.product-intro__head-mainprice div.original span');
-                if (currencyElement) {
-                    const currencyText = currencyElement.textContent.trim();
-                    // Extract the currency symbol and convert it to uppercase
-                    return currencyText.match(/[A-Z]+/) ? currencyText.match(/[A-Z]+/)[0] : "Not found";
-                } else {
-                    return "Not found";
-                }
-            });
-        } catch (error) {
-            console.error("Error occurred while extracting currency symbol:", error);
-        }
+        const extracted = await page.evaluate(() => {
+            const priceEl = document.querySelector(
+                "div.product-intro__head-mainprice div.original span"
+            );
+            const priceRaw = priceEl ? priceEl.textContent.trim() : null;
 
-        // Extract shipping price
-        try {
-            let shippingPriceText = await page.evaluate(() => {
-                const shippingPriceElement = document.evaluate('//div[@class="shipping-price"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                return shippingPriceElement ? shippingPriceElement.textContent?.trim() : "Not found";
-            });
+            const shipNode = document.evaluate(
+                '//div[@class="shipping-price"]',
+                document,
+                null,
+                XPathResult.FIRST_ORDERED_NODE_TYPE,
+                null
+            ).singleNodeValue;
 
-            if (/^\d*\.?\d+$/.test(shippingPriceText)) {
-                product.shipping_price = parseFloat(shippingPriceText.replace(/[^\d.]/g, ""));
-            } else {
-                product.shipping_price = null;
-            }
-        } catch (error) {
-            console.error("Error occurred while extracting shipping price:", error);
-        }
+            return {
+                priceRaw,
+                currency: priceRaw && priceRaw.match(/[A-Z]+/) ? priceRaw.match(/[A-Z]+/)[0] : null,
+                shippingRaw: shipNode ? shipNode.textContent?.trim() : null,
+            };
+        });
+
+        product.price = parsePrice(extracted.priceRaw);
+        product.currency = extracted.currency;
+        product.shipping_price = parsePrice(extracted.shippingRaw);
 
         return product;
     } catch (error) {
-        console.error("An error occurred:", error);
+        console.error("[v0] shein-price scrape error:", error);
+        throw error;
     } finally {
-        if (browser) {
-            await browser.close();
+        if (context) {
+            await context.close().catch(() => {});
         }
     }
 }
