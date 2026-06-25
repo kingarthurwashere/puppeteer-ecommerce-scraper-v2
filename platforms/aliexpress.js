@@ -1,28 +1,31 @@
-const puppeteer = require("puppeteer");
 const { Product } = require("../models/product");
-const generateJobId = require("../utils");
+const { generateJobId, setupPageFilters } = require("../utils");
+const { getProxyBrowser } = require("./browserManager");
 
 async function scrapWithAliexpress(url) {
-    let browser;
+    let context;
     try {
-        browser = await puppeteer.launch({
-            headless: true,
-            defaultViewport: null,
-            userDataDir: "./tmp",
-            args: ['--no-sandbox']
-        });
+        const browser = await getProxyBrowser();
+        context = await browser.createBrowserContext();
+        const page = await context.newPage();
 
-        const page = await browser.newPage();
+        // Set up proxy authentication
+        const username = 'Dxbrunners';
+        const password = 'Mikhman_2024';
+        await page.authenticate({ username, password });
 
-        await page.setCacheEnabled(false);
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+
+        await setupPageFilters(page);
+
         await page.setDefaultNavigationTimeout(120000);
 
         await page.goto(url);
 
-        await page.evaluate( () =>
-        {
-            window.scrollBy( 0, window.innerHeight ); // Scrolls down by the height of the viewport
-        } );
+        // Scroll down
+        await page.evaluate(() => {
+            window.scrollBy(0, window.innerHeight);
+        });
 
         let product = new Product();
         product.jobId = generateJobId();
@@ -53,22 +56,18 @@ async function scrapWithAliexpress(url) {
         }
 
         // Extract description
-        try
-        {
-            product.description = await page.evaluate( () =>
-            {
-                const descriptionElement = document.querySelector( '.specification--list--fiWsSyv' );
+        try {
+            product.description = await page.evaluate(() => {
+                const descriptionElement = document.querySelector('.specification--list--fiWsSyv');
                 return descriptionElement ? descriptionElement.textContent.trim() : 'Not found';
-            } );
-        } catch ( error )
-        {
-            console.error( "Error occurred while extracting description:", error );
+            });
+        } catch (error) {
+            console.error("Error occurred while extracting description:", error);
         }
 
-        try
-        {
-            product.description_images = await page.evaluate( () =>
-            {
+        // Extract description images
+        try {
+            product.description_images = await page.evaluate(() => {
                 const imageElements = document.evaluate(
                     '//div[@id="product-description"]//img/@src',
                     document,
@@ -78,39 +77,76 @@ async function scrapWithAliexpress(url) {
                 );
                 const result = [];
                 let node = imageElements.iterateNext();
-                while ( node )
-                {
-                    result.push( node.value );
+                while (node) {
+                    result.push(node.value);
                     node = imageElements.iterateNext();
                 }
                 return result;
-            } );
-        } catch ( error )
-        {
-            console.error(
-                "Error occurred while extracting description images:",
-                error
-            );
+            });
+        } catch (error) {
+            console.error("Error occurred while extracting description images:", error);
         }
-        // Extract specifictions
-        try
-        {
-            product.specifications = await page.evaluate( () =>
-            {
-                const specificationsElement = document.querySelector( '.description--origin-part--SsZJoGC' );
+
+        // Extract specifications
+        try {
+            product.specifications = await page.evaluate(() => {
+                const specificationsElement = document.querySelector('.description--origin-part--SsZJoGC');
                 return specificationsElement ? specificationsElement.textContent.trim() : 'Not found';
-            } );
-        } catch ( error )
-        {
-            console.error( "Error occurred while extracting specifications:", error );
+            });
+        } catch (error) {
+            console.error("Error occurred while extracting specifications:", error);
+        }
+
+        // Extract price
+        try {
+            const priceText = await page.evaluate(() => {
+                const priceElement = document.querySelector(
+                    "div.price--current--H7sGzqb.product-price-current"
+                );
+                return priceElement ? priceElement.textContent.trim() : null;
+            });
+
+            if (priceText) {
+                product.price = parseFloat(priceText.replace(/[^\d.]/g, ""));
+            }
+        } catch (error) {
+            console.error("Error occurred while extracting price:", error);
+        }
+
+        // Extract currency
+        try {
+            product.currency = await page.evaluate(() => {
+                const currencyElement = document.querySelector(
+                    'span[class="es--char--Vcv75ku"]'
+                );
+                return currencyElement ? currencyElement.textContent.trim() : null;
+            });
+        } catch (error) {
+            console.error("Error occurred while extracting currency:", error);
+        }
+
+        // Extract shipping price
+        try {
+            let shippingPriceText = await page.evaluate(() => {
+                const shippingPriceElement = document.querySelector('div[data-pl="product-shipping"] div.dynamic-shipping div.dynamic-shipping-line.dynamic-shipping-titleLayout span strong');
+                return shippingPriceElement ? shippingPriceElement.textContent.trim() : "Not found";
+            });
+
+            if (shippingPriceText !== "Not found") {
+                product.shipping_price = parseFloat(shippingPriceText.replace(/[^\d.]/g, ''));
+            } else {
+                product.shipping_price = 0.0;
+            }
+        } catch (error) {
+            console.error("Error occurred while extracting Shipping Price:", error);
         }
 
         return product;
     } catch (error) {
         console.error("An error occurred:", error);
     } finally {
-        if (browser) {
-            await browser.close();
+        if (context) {
+            await context.close().catch(() => {});
         }
     }
 }

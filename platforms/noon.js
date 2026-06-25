@@ -1,23 +1,19 @@
-const puppeteer = require("puppeteer");
 const { Product } = require("../models/product");
-const generateJobId = require("../utils");
+const { generateJobId, setupPageFilters } = require("../utils");
+const { getBrowser } = require("./browserManager");
 
 async function scrapWithNoon(url) {
-    let browser;
+    let context;
     try {
-        browser = await puppeteer.launch({
-            headless: true,
-            defaultViewport: null,
-            userDataDir: "./tmp",
-            args: ['--no-sandbox']
-        });
+        const browser = await getBrowser();
+        context = await browser.createBrowserContext();
+        const page = await context.newPage();
+        
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+        await setupPageFilters(page);
 
-        await page.setCacheEnabled(false);
-
-        // Increase navigation timeout to 60 seconds
+        // Increase navigation timeout to 120 seconds
         await page.setDefaultNavigationTimeout(120000);
 
         await page.goto(url);
@@ -159,8 +155,8 @@ async function scrapWithNoon(url) {
     } catch (error) {
         console.error("An error occurred:", error);
     } finally {
-        if (browser) {
-            await browser.close();
+        if (context) {
+            await context.close().catch(() => {});
         }
     }
 }
