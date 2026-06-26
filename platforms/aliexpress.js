@@ -1,18 +1,13 @@
 const { Product } = require("../models/product");
 const { generateJobId, setupPageFilters } = require("../utils");
-const { getProxyBrowser } = require("./browserManager");
+const { getBrowser } = require("./browserManager");
 
 async function scrapWithAliexpress(url) {
     let context;
     try {
-        const browser = await getProxyBrowser();
+        const browser = await getBrowser();
         context = await browser.createBrowserContext();
         const page = await context.newPage();
-
-        // Set up proxy authentication
-        const username = 'Dxbrunners';
-        const password = 'Mikhman_2024';
-        await page.authenticate({ username, password });
 
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 

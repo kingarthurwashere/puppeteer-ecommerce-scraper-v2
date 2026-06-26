@@ -4,23 +4,11 @@ const { Product } = require("../models/product");
 async function scrapSheinprice(url) {
     let browser;
     try {
-        const proxy = 'ae-pr.oxylabs.io:40000';
-        const username = 'Dxbrunners';
-        const password = 'Mikhman_2024';
-
-        const launchOptions = {
-            args: [
-                `--proxy-server=${proxy}`,
-                '--no-sandbox'
-            ],
-            headless: true
-        };
-
-        browser = await puppeteer.launch(launchOptions);
+        browser = await puppeteer.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
         const page = await browser.newPage();
-
-        // Set up proxy authentication
-        await page.authenticate({ username, password });
 
         await page.setCacheEnabled(false);
 

@@ -1,6 +1,6 @@
 const puppeteer = require("puppeteer");
 const { Product } = require("../models/product");
-const generateJobId = require("../utils");
+const { generateJobId } = require("../utils");
 
 async function scrapeWithShein(url) {
     let browser;
